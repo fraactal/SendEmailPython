@@ -1,0 +1,17 @@
+
+Instalar dependencias
+
+pip install selenium
+pip install webdriver-manager
+pip install pillow
+
+
+python3 -m venv env
+source env/bin/activate
+
+pip install -r requirements.txt
+
+selenium
+webdriver-manager
+pillow
+
