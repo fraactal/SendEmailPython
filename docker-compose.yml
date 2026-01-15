@@ -7,5 +7,5 @@ services:
       OUTPUT_DIR: /data
       TZ: America/Santiago
     volumes:
-      - /capturas_cmdb:/data
+      - /opt/grafana-capture/capturas_cmdb:/data
     restart: "no"
