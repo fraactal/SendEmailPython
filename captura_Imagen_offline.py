@@ -111,7 +111,7 @@ def build_driver():
     return webdriver.Chrome(service=service, options=chrome_options)
 
 
-# ---------------- STITCH (igual al perfecto) ----------------
+# ---------------- STITCH ----------------
 def stitch_images_dynamic(shots, viewport_height):
     """
     Une capturas eliminando duplicación según el overlap REAL.
@@ -243,7 +243,7 @@ def capture_dashboard():
         stitched = stitch_images_dynamic(shots, viewport_height)
 
         # ✅ Imprimir fecha dentro de la imagen (opcional)
-        stitched = overlay_date(stitched, f"Generado: {date_label()}")
+        #stitched = overlay_date(stitched, f"Generado: {date_label()}")
 
         final_path = os.path.join(OUTPUT_DIR, f"{FILE_PREFIX}_{now_stamp()}.png")
         stitched.save(final_path, "PNG")
@@ -278,5 +278,6 @@ def send_email(attachment_path: str):
 
 if __name__ == "__main__":
     final_img = capture_dashboard()
+    #Se toma variable desde archivo .env
     if SEND_EMAIL:
         send_email(final_img)
