@@ -1,0 +1,11 @@
+services:
+  captura:
+    image: captura-cmdb-offline:1.0
+    env_file:
+      - .env
+    environment:
+      OUTPUT_DIR: /data
+      TZ: America/Santiago
+    volumes:
+      - /capturas_cmdb:/data
+    restart: "no"

@@ -1,0 +1,46 @@
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=America/Santiago
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
+    tzdata \
+    fonts-dejavu-core \
+    ca-certificates \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcairo2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxrandr2 \
+    libxss1 \
+    libxtst6 \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_BIN=/usr/bin/chromium \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    OUTPUT_DIR=/data
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY captura_Imagen_offline.py .
+
+RUN mkdir -p /data
+VOLUME ["/data"]
+
+CMD ["python", "captura_Imagen_offline.py"]

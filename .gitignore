@@ -1,2 +1,23 @@
-#environment
+# Variables de entorno (credenciales)
 .env
+
+# Entornos virtuales de Python
+/virtualenv/
+venv/
+.env/
+.venv/
+
+# Cachés de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos generados
+/output/
+/data/
+/tmp_captures/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
