@@ -14,7 +14,10 @@ import smtplib
 from email.message import EmailMessage
 
 from dotenv import load_dotenv
-load_dotenv()  # carga .env del directorio actual (o donde ejecutes)
+
+# -------------------- ENV --------------------
+load_dotenv()
+
 
 def env_bool(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
@@ -48,18 +51,17 @@ EMAIL_TO = get_env("EMAIL_TO", "")
 EMAIL_FROM = get_env("EMAIL_FROM", SMTP_USER)
 EMAIL_SUBJECT = get_env("EMAIL_SUBJECT", "Grafana Dashboard Capture")
 
-# Chrome paths en Debian slim (en Dockerfile)
+# Chrome paths en Debian slim (Dockerfile)
 CHROME_BIN = get_env("CHROME_BIN", "/usr/bin/chromium")
 CHROMEDRIVER_PATH = get_env("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
 
 
-def now_stamp():
-    # Fecha/hora del servidor (setear TZ en docker)
+# -------------------- Helpers --------------------
+def now_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def date_label():
-    # Texto humano para imprimir en la imagen
+def date_label() -> str:
     return datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 
@@ -67,22 +69,11 @@ def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def stitch_images(image_paths):
-    images = [Image.open(p).convert("RGB") for p in image_paths]
-    widths, heights = zip(*(img.size for img in images))
-    total_height = sum(heights)
-    max_width = max(widths)
-
-    stitched = Image.new("RGB", (max_width, total_height), (255, 255, 255))
-    y = 0
-    for img in images:
-        stitched.paste(img, (0, y))
-        y += img.height
-    return stitched
-
-
 def overlay_date(img: Image.Image, text: str) -> Image.Image:
-    # Caja semitransparente + texto
+    """
+    Esto es SOLO para imprimir la fecha dentro de la imagen.
+    Si no lo quieres, puedes borrar esta función y su llamada.
+    """
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
@@ -90,20 +81,24 @@ def overlay_date(img: Image.Image, text: str) -> Image.Image:
         font = ImageFont.load_default()
 
     padding = 14
-    text_w, text_h = draw.textbbox((0, 0), text, font=font)[2:]
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    x, y = 20, 20
     box_w = text_w + padding * 2
     box_h = text_h + padding * 2
 
-    x = 20
-    y = 20
-
-    # Dibujar rectángulo (simulamos “overlay” con un rectángulo oscuro)
     draw.rectangle([x, y, x + box_w, y + box_h], fill=(0, 0, 0))
     draw.text((x + padding, y + padding), text, font=font, fill=(255, 255, 255))
     return img
 
 
 def build_driver():
+    """
+    En OFFLINE NO usamos ChromeDriverManager (requiere internet).
+    Usamos Chromium + Chromedriver instalados en el contenedor (paths fijos).
+    """
     chrome_options = Options()
     chrome_options.binary_location = CHROME_BIN
     chrome_options.add_argument("--headless=new")
@@ -114,6 +109,50 @@ def build_driver():
 
     service = Service(CHROMEDRIVER_PATH)
     return webdriver.Chrome(service=service, options=chrome_options)
+
+
+# ---------------- STITCH (igual al perfecto) ----------------
+def stitch_images_dynamic(shots, viewport_height):
+    """
+    Une capturas eliminando duplicación según el overlap REAL.
+    shots: [(filepath, real_scrollTop), ...]
+    """
+    opened = [(Image.open(p).convert("RGB"), y) for p, y in shots]
+
+    processed = []
+    prev_y = None
+    prev_img_h = None  # alto REAL del screenshot anterior (sin recorte)
+
+    for idx, (img, y) in enumerate(opened):
+        if idx == 0:
+            processed.append(img)
+            prev_y = y
+            prev_img_h = img.size[1]
+            continue
+
+        overlap_px = (prev_y + (prev_img_h or viewport_height)) - y
+        overlap_px = max(0, min(overlap_px, img.size[1] - 1))
+
+        if overlap_px > 0:
+            w, h = img.size
+            img = img.crop((0, overlap_px, w, h))
+
+        processed.append(img)
+
+        prev_y = y
+        prev_img_h = opened[idx][0].size[1]
+
+    widths, heights = zip(*(im.size for im in processed))
+    total_height = sum(heights)
+    max_width = max(widths)
+
+    stitched = Image.new("RGB", (max_width, total_height), (255, 255, 255))
+    y_offset = 0
+    for im in processed:
+        stitched.paste(im, (0, y_offset))
+        y_offset += im.size[1]
+
+    return stitched
 
 
 def capture_dashboard():
@@ -128,6 +167,7 @@ def capture_dashboard():
     os.makedirs(tmp_dir, exist_ok=True)
 
     driver = build_driver()
+
     try:
         print("🔐 Iniciando sesión en Grafana...")
         driver.get(GRAFANA_URL_LOGIN)
@@ -141,58 +181,92 @@ def capture_dashboard():
         driver.get(GRAFANA_DASHBOARD_URL)
         time.sleep(7)
 
-        print("⬇️ Capturando por secciones del contenedor scrollable...")
+        # Desactivar animaciones (reduce cortes/reflow)
+        driver.execute_script("""
+        const style = document.createElement('style');
+        style.innerHTML = '* { transition: none !important; animation: none !important; }';
+        document.head.appendChild(style);
+        """)
 
-        # OJO: este XPATH puede variar según versión/tema de Grafana
+        print("⬇️ Capturando scroll completo (contenedor)...")
+
         container = driver.find_element(By.XPATH, '//*[@id="reactRoot"]/div[1]/main/div[3]/div/div/div[1]')
 
-        scroll_height = driver.execute_script("return arguments[0].scrollHeight", container)
-        viewport_height = 1080
-        steps = scroll_height // viewport_height + 1
+        driver.execute_script("arguments[0].scrollTo(0, 0);", container)
+        time.sleep(1)
 
-        image_paths = []
-        for i in range(steps):
-            y = i * viewport_height
-            driver.set_window_size(1920, viewport_height + 200)
-            driver.execute_script("arguments[0].scrollTo(0, arguments[1]);", container, y)
-            time.sleep(1.5)
+        viewport_height = driver.execute_script("return arguments[0].clientHeight", container)
+
+        overlap = 140
+        step = max(viewport_height - overlap, 200)
+
+        shots = []  # [(filepath, real_scrollTop), ...]
+
+        i = 0
+        last_real_y = -1
+        stuck_count = 0
+
+        while True:
+            scroll_height = driver.execute_script("return arguments[0].scrollHeight", container)
+            max_y = max(scroll_height - viewport_height, 0)
+
+            requested_y = min(i * step, max_y)
+
+            driver.execute_script("arguments[0].scrollTo(0, arguments[1]);", container, requested_y)
+            time.sleep(1.3)
+
+            # ✅ IMPORTANTE: scroll REAL aplicado
+            real_y = driver.execute_script("return arguments[0].scrollTop;", container)
 
             filename = os.path.join(tmp_dir, f"screenshot_{i}.png")
-            driver.save_screenshot(filename)
-            image_paths.append(filename)
-            print(f"📸 Captura {i+1}/{steps} guardada.")
+            container.screenshot(filename)
+            shots.append((filename, real_y))
+
+            print(f"📸 Captura {i+1} (real_y={real_y} / max_y={max_y})")
+
+            # Evitar duplicado final
+            if real_y == last_real_y:
+                stuck_count += 1
+            else:
+                stuck_count = 0
+            last_real_y = real_y
+
+            if stuck_count >= 2:
+                break
+
+            if (max_y - real_y) < 5:
+                break
+
+            i += 1
 
         print("🧵 Uniendo capturas...")
-        stitched = stitch_images(image_paths)
+        stitched = stitch_images_dynamic(shots, viewport_height)
 
-        print("🗓️ Imprimiendo fecha en la imagen...")
+        # ✅ Imprimir fecha dentro de la imagen (opcional)
         stitched = overlay_date(stitched, f"Generado: {date_label()}")
 
-        stamp = now_stamp()
-        final_path = os.path.join(OUTPUT_DIR, f"{FILE_PREFIX}_{stamp}.png")
+        final_path = os.path.join(OUTPUT_DIR, f"{FILE_PREFIX}_{now_stamp()}.png")
         stitched.save(final_path, "PNG")
-
         print(f"✅ Imagen final guardada: {final_path}")
         return final_path
 
     finally:
         driver.quit()
-        if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def send_email(attachment_path: str):
     if not (SMTP_USER and SMTP_PASSWORD and EMAIL_TO):
-        raise ValueError("Faltan variables SMTP_USER/SMTP_PASSWORD/EMAIL_TO para enviar correo")#
+        raise ValueError("Faltan variables SMTP_USER/SMTP_PASSWORD/EMAIL_TO para enviar correo")
 
     msg = EmailMessage()
     msg["Subject"] = EMAIL_SUBJECT
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
-    msg.set_content("Buenos días,\n\nAdjunto captura del dashboard.\n\nSaludos.\n")#
+    msg.set_content("Buenos días,\n\nAdjunto captura del dashboard.\n\nSaludos.\n")
 
     with open(attachment_path, "rb") as f:
-        msg.add_attachment(f.read(), maintype="image", subtype="png", filename=os.path.basename(attachment_path))#
+        msg.add_attachment(f.read(), maintype="image", subtype="png", filename=os.path.basename(attachment_path))
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
